@@ -162,6 +162,43 @@ export default function Play({
     )
   }, [])
 
+  const setPieceRot = useCallback((id: string, rot: number) => {
+    // Gentle snap at level: the target tilt is always 0.
+    const snapped = Math.abs(rot) <= 2 ? 0 : Math.round(rot)
+    const clamped = Math.min(MAX_ROT, Math.max(-MAX_ROT, snapped))
+    setPieces((ps) => ps.map((p) => (p.id === id ? { ...p, rot: clamped } : p)))
+  }, [])
+
+  // ---- drag-to-rotate via the handle knob above the print ----
+  const beginRotateDrag = (id: string, e: React.PointerEvent) => {
+    if (phase !== 'playing') return
+    e.preventDefault()
+    e.stopPropagation()
+    const rect = boardRef.current!.getBoundingClientRect()
+    const piece = piecesRef.current.find((p) => p.id === id)!
+    const s = displayScale()
+    const cx = rect.left + piece.x + (piece.img.naturalWidth * s) / 2
+    const cy = rect.top + piece.y + (piece.img.naturalHeight * s) / 2
+    const angleAt = (ev: { clientX: number; clientY: number }) =>
+      (Math.atan2(ev.clientY - cy, ev.clientX - cx) * 180) / Math.PI
+    const start = angleAt(e)
+    const startRot = piece.rot
+    setSelectedId(id)
+
+    const onMove = (ev: PointerEvent) => {
+      let d = angleAt(ev) - start
+      if (d > 180) d -= 360
+      if (d < -180) d += 360
+      setPieceRot(id, startRot + d)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
   // ---- dragging (shared by board pieces and tray prints) ----
   const beginDrag = (id: string, e: React.PointerEvent, fromTray: boolean) => {
     if (phase !== 'playing') return
@@ -388,6 +425,15 @@ export default function Play({
                   </button>
                   <RotateButton dir={-1} pieceId={p.id} rotatePiece={rotatePiece} />
                   <RotateButton dir={1} pieceId={p.id} rotatePiece={rotatePiece} />
+                  <div
+                    className="piece-handle"
+                    role="slider"
+                    aria-label="Drag to rotate print"
+                    aria-valuenow={p.rot}
+                    aria-valuemin={-MAX_ROT}
+                    aria-valuemax={MAX_ROT}
+                    onPointerDown={(e) => beginRotateDrag(p.id, e)}
+                  />
                   <span className="piece-angle">{p.rot > 0 ? `+${p.rot}` : p.rot}°</span>
                 </>
               )}
@@ -412,8 +458,8 @@ export default function Play({
         ))}
         {trayPieces.length === 0 && <span className="tray-empty">every print is on the board</span>}
         <span className="play-hint" style={{ marginLeft: 'auto' }}>
-          drag prints · arrow keys nudge (shift = ×8) · ⟲⟳, Q/E or scroll to rotate (shift = ×5) ·
-          × returns it
+          drag prints · arrow keys nudge (shift = ×8) · grab the knob to rotate (⟲⟳, Q/E or
+          scroll work too) · × returns it
         </span>
       </div>
 
@@ -450,14 +496,14 @@ export default function Play({
   function TelemetryLine() {
     const o = stitchRef.current
     if (!o) return null
-    const seams = level.pieces.length - 1
+    const plural = o.linkCount > 1 ? 's' : ''
     return (
       <p className="telemetry">
-        {o.usedFallback
+        {o.linksVerified === 0
           ? 'verification below threshold — using archived registration'
-          : `match verified: ${o.inliers}/${o.totalMatches} RANSAC inliers across ${seams} seam${
-              seams > 1 ? 's' : ''
-            }`}
+          : o.usedFallback
+            ? `${o.linksVerified}/${o.linkCount} seams verified live (${o.inliers}/${o.totalMatches} inliers) · archived registration for the rest`
+            : `match verified: ${o.inliers}/${o.totalMatches} RANSAC inliers across ${o.linkCount} seam${plural}`}
       </p>
     )
   }
@@ -485,12 +531,18 @@ function RotateButton({
       onPointerDown={(e) => {
         e.stopPropagation()
         e.preventDefault()
+        // Capture the pointer: the button rotates along with the print, so
+        // without capture it slides out from under the cursor and the hold dies.
+        e.currentTarget.setPointerCapture(e.pointerId)
         rotatePiece(pieceId, dir)
         stop()
-        timer.current = window.setInterval(() => rotatePiece(pieceId, dir), 90)
+        let ticks = 0
+        timer.current = window.setInterval(() => {
+          ticks++
+          rotatePiece(pieceId, dir * (ticks > 8 ? 3 : 1))
+        }, 70)
       }}
       onPointerUp={stop}
-      onPointerLeave={stop}
       onPointerCancel={stop}
     >
       {dir === -1 ? '⟲' : '⟳'}

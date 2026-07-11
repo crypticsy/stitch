@@ -515,14 +515,14 @@ img {
 
 .piece-rotate {
   position: absolute;
-  top: -0.9rem;
-  width: 1.8rem;
-  height: 1.8rem;
+  top: -1.1rem;
+  width: 2.2rem;
+  height: 2.2rem;
   border-radius: 50%;
   background: var(--accent-dark);
   color: var(--cream);
   border: 2px solid var(--ink);
-  font-size: 1rem;
+  font-size: 1.15rem;
   font-weight: 700;
   line-height: 1;
   z-index: 5;
@@ -530,12 +530,49 @@ img {
   touch-action: none;
 }
 
+.piece-rotate:active {
+  transform: scale(0.92);
+}
+
 .piece-rotate--ccw {
-  left: -0.9rem;
+  left: calc(50% - 3.6rem);
 }
 
 .piece-rotate--cw {
-  left: 1.2rem;
+  left: calc(50% + 1.4rem);
+}
+
+.piece-handle {
+  position: absolute;
+  top: -3.2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  background: var(--cream);
+  border: 3px solid var(--ink);
+  box-shadow: var(--shadow-small);
+  cursor: grab;
+  touch-action: none;
+  z-index: 6;
+}
+
+.piece-handle:active {
+  cursor: grabbing;
+  background: var(--accent-dark);
+}
+
+/* stem connecting the knob to the print, like a needle stuck in it */
+.piece-handle::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: 3px;
+  height: 1rem;
+  background: var(--ink);
+  transform: translateX(-50%);
 }
 
 .piece-angle {

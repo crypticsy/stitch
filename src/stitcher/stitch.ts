@@ -23,6 +23,9 @@ export interface StitchOutcome {
   /** RANSAC inliers summed over every adjacent pair in the chain. */
   inliers: number
   totalMatches: number
+  /** Adjacent pairs whose live registration passed the eq. 13 test. */
+  linksVerified: number
+  linkCount: number
   /** True if any link fell back to the archived registration. */
   usedFallback: boolean
 }
@@ -50,6 +53,7 @@ export async function stitchChain(
   const ys = [0]
   let inliers = 0
   let totalMatches = 0
+  let linksVerified = 0
   let usedFallback = false
   const linkDx: number[] = [] // work px, for gain overlap ranges
   for (let i = 0; i < ids.length - 1; i++) {
@@ -61,6 +65,7 @@ export async function stitchChain(
       dy = align.dy * scale
       inliers += align.inliers
       totalMatches += align.totalMatches
+      linksVerified++
     } else {
       dx = fallbacks[i].dx
       dy = fallbacks[i].dy
@@ -100,7 +105,14 @@ export async function stitchChain(
     gain: clamp(target / Math.max(lums[i], 1e-3)),
   }))
 
-  return { pieces, inliers, totalMatches, usedFallback }
+  return {
+    pieces,
+    inliers,
+    totalMatches,
+    linksVerified,
+    linkCount: ids.length - 1,
+    usedFallback,
+  }
 }
 
 /** Feature-match two images and estimate the motion between them. */
