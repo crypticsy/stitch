@@ -513,6 +513,47 @@ img {
   z-index: 5;
 }
 
+.piece-rotate {
+  position: absolute;
+  top: -0.9rem;
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 50%;
+  background: var(--accent-dark);
+  color: var(--cream);
+  border: 2px solid var(--ink);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  z-index: 5;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.piece-rotate--ccw {
+  left: -0.9rem;
+}
+
+.piece-rotate--cw {
+  left: 1.2rem;
+}
+
+.piece-angle {
+  position: absolute;
+  bottom: -1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.05rem 0.45rem;
+  background: var(--ink);
+  color: var(--cream);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 5;
+  white-space: nowrap;
+}
+
 .tray {
   width: 100%;
   padding: 0.8rem 1rem 1rem;

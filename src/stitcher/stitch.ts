@@ -20,63 +20,87 @@ export interface PieceLayout {
 
 export interface StitchOutcome {
   pieces: PieceLayout[]
-  align: AlignResult
+  /** RANSAC inliers summed over every adjacent pair in the chain. */
+  inliers: number
+  totalMatches: number
+  /** True if any link fell back to the archived registration. */
   usedFallback: boolean
 }
 
 /**
- * Full pipeline for a two-image component, following Brown & Lowe
+ * Full pipeline for an n-image connected component, following Brown & Lowe
  * "Automatic Panoramic Image Stitching using Invariant Features":
  * invariant interest points → descriptor matching → RANSAC motion →
  * probabilistic verification → gain compensation → weighted blending
  * (blending happens at render time, see renderPanorama).
+ *
+ * Pieces come in chain order; each adjacent pair is aligned independently
+ * and offsets are accumulated along the chain.
  */
-export async function stitchPair(
-  srcA: string,
-  srcB: string,
-  fallback: { dx: number; dy: number },
+export async function stitchChain(
+  srcs: string[],
+  fallbacks: { dx: number; dy: number }[],
 ): Promise<StitchOutcome> {
-  const [imgA, imgB] = await Promise.all([loadImage(srcA), loadImage(srcB)])
-  const idA = toImageData(imgA, WORK_WIDTH)
-  const idB = toImageData(imgB, WORK_WIDTH)
+  const imgs = await Promise.all(srcs.map(loadImage))
+  const ids = imgs.map((img) => toImageData(img, WORK_WIDTH))
+  const scale = imgs[0].naturalWidth / WORK_WIDTH
 
-  const align = alignPair(idA, idB)
-  const scale = imgA.naturalWidth / WORK_WIDTH
-
-  let dx: number
-  let dy: number
+  // Align each adjacent pair; accumulate positions along the chain.
+  const xs = [0]
+  const ys = [0]
+  let inliers = 0
+  let totalMatches = 0
   let usedFallback = false
-  if (align && align.verified) {
-    dx = align.dx * scale
-    dy = align.dy * scale
-  } else {
-    dx = fallback.dx
-    dy = fallback.dy
-    usedFallback = true
+  const linkDx: number[] = [] // work px, for gain overlap ranges
+  for (let i = 0; i < ids.length - 1; i++) {
+    const align = alignPair(ids[i], ids[i + 1])
+    let dx: number
+    let dy: number
+    if (align && align.verified) {
+      dx = align.dx * scale
+      dy = align.dy * scale
+      inliers += align.inliers
+      totalMatches += align.totalMatches
+    } else {
+      dx = fallbacks[i].dx
+      dy = fallbacks[i].dy
+      usedFallback = true
+      if (align) totalMatches += align.totalMatches
+    }
+    xs.push(xs[i] + dx)
+    ys.push(ys[i] + dy)
+    linkDx.push(dx / scale)
   }
 
-  // Gain compensation (section 6, simplified for a pair): equalise the mean
-  // luminance of the overlap region, with gains anchored around 1.
-  const dxWork = dx / scale
-  const overlapA: [number, number] = dxWork >= 0 ? [dxWork, WORK_WIDTH] : [0, WORK_WIDTH + dxWork]
-  const overlapB: [number, number] = dxWork >= 0 ? [0, WORK_WIDTH - dxWork] : [-dxWork, WORK_WIDTH]
-  const lumA = meanLuminance(idA, overlapA[0], overlapA[1])
-  const lumB = meanLuminance(idB, overlapB[0], overlapB[1])
-  const target = (lumA + lumB) / 2
+  // Gain compensation (section 6, simplified): equalise the mean luminance
+  // of each piece over its overlap regions, gains anchored around 1.
+  const lums = ids.map((id, i) => {
+    const ranges: [number, number][] = []
+    if (i > 0) {
+      const d = linkDx[i - 1]
+      ranges.push(d >= 0 ? [0, WORK_WIDTH - d] : [-d, WORK_WIDTH])
+    }
+    if (i < ids.length - 1) {
+      const d = linkDx[i]
+      ranges.push(d >= 0 ? [d, WORK_WIDTH] : [0, WORK_WIDTH + d])
+    }
+    const vals = ranges.map(([a, b]) => meanLuminance(id, a, b))
+    return vals.reduce((s, v) => s + v, 0) / vals.length
+  })
+  const target = lums.reduce((s, v) => s + v, 0) / lums.length
   const clamp = (g: number) => Math.min(1.35, Math.max(0.7, g))
-  const gainA = clamp(target / Math.max(lumA, 1e-3))
-  const gainB = clamp(target / Math.max(lumB, 1e-3))
 
-  const pieces: PieceLayout[] = [
-    { src: srcA, img: imgA, x: Math.max(0, -dx), y: Math.max(0, -dy), gain: gainA },
-    { src: srcB, img: imgB, x: Math.max(0, dx), y: Math.max(0, dy), gain: gainB },
-  ]
+  const minX = Math.min(...xs)
+  const minY = Math.min(...ys)
+  const pieces: PieceLayout[] = imgs.map((img, i) => ({
+    src: srcs[i],
+    img,
+    x: xs[i] - minX,
+    y: ys[i] - minY,
+    gain: clamp(target / Math.max(lums[i], 1e-3)),
+  }))
 
-  return {
-    pieces,
-    align: align ?? { dx, dy, inliers: 0, totalMatches: 0, verified: false },
-    usedFallback,
-  }
+  return { pieces, inliers, totalMatches, usedFallback }
 }
 
 /** Feature-match two images and estimate the motion between them. */
@@ -87,6 +111,15 @@ export function alignPair(idA: ImageData, idB: ImageData): AlignResult | null {
   const descB = extractDescriptors(grayB, harrisCorners(grayB))
   const matches = matchFeatures(descA, descB)
   return ransacTranslation(matches)
+}
+
+export interface RenderPiece {
+  img: HTMLImageElement
+  x: number
+  y: number
+  gain: number
+  /** Rotation about the piece centre, degrees clockwise. */
+  rot?: number
 }
 
 export interface RenderOptions {
@@ -102,22 +135,26 @@ export interface RenderOptions {
  * from 1 at the image centre to 0 at the edges, and the composite is the
  * weight-normalised sum. (The paper refines this with multi-band blending;
  * linear blending is the single-band case.)
+ *
+ * Pieces may be rotated about their centre (the crooked-prints mechanic);
+ * weights are evaluated in the piece's own unrotated frame.
  */
-export function renderPanorama(
-  pieces: { img: HTMLImageElement; x: number; y: number; gain: number }[],
-  opts: RenderOptions,
-): HTMLCanvasElement {
+export function renderPanorama(pieces: RenderPiece[], opts: RenderOptions): HTMLCanvasElement {
   const { scale, gainCompensation = true } = opts
-  const rects = pieces.map((p) => ({
-    x: p.x * scale,
-    y: p.y * scale,
-    w: p.img.naturalWidth * scale,
-    h: p.img.naturalHeight * scale,
-  }))
+  const rects = pieces.map((p) => {
+    const w = p.img.naturalWidth * scale
+    const h = p.img.naturalHeight * scale
+    const th = ((p.rot ?? 0) * Math.PI) / 180
+    const bw = w * Math.abs(Math.cos(th)) + h * Math.abs(Math.sin(th))
+    const bh = w * Math.abs(Math.sin(th)) + h * Math.abs(Math.cos(th))
+    const cx = p.x * scale + w / 2
+    const cy = p.y * scale + h / 2
+    return { w, h, th, bw, bh, x: cx - bw / 2, y: cy - bh / 2 }
+  })
   const minX = Math.min(...rects.map((r) => r.x))
   const minY = Math.min(...rects.map((r) => r.y))
-  const maxX = Math.max(...rects.map((r) => r.x + r.w))
-  const maxY = Math.max(...rects.map((r) => r.y + r.h))
+  const maxX = Math.max(...rects.map((r) => r.x + r.bw))
+  const maxY = Math.max(...rects.map((r) => r.y + r.bh))
   const outW = Math.max(1, Math.round(maxX - minX))
   const outH = Math.max(1, Math.round(maxY - minY))
 
@@ -129,25 +166,38 @@ export function renderPanorama(
 
   pieces.forEach((p, i) => {
     const r = rects[i]
-    const w = Math.max(1, Math.round(r.w))
-    const h = Math.max(1, Math.round(r.h))
-    work.width = w
-    work.height = h
-    wctx.drawImage(p.img, 0, 0, w, h)
-    const data = wctx.getImageData(0, 0, w, h).data
+    const bw = Math.max(1, Math.round(r.bw))
+    const bh = Math.max(1, Math.round(r.bh))
+    work.width = bw
+    work.height = bh
+    wctx.clearRect(0, 0, bw, bh)
+    wctx.save()
+    wctx.translate(bw / 2, bh / 2)
+    wctx.rotate(r.th)
+    wctx.drawImage(p.img, -r.w / 2, -r.h / 2, r.w, r.h)
+    wctx.restore()
+    const data = wctx.getImageData(0, 0, bw, bh).data
     const gain = gainCompensation ? p.gain : 1
     const ox = Math.round(r.x - minX)
     const oy = Math.round(r.y - minY)
-    for (let y = 0; y < h; y++) {
+    const cos = Math.cos(r.th)
+    const sin = Math.sin(r.th)
+    for (let y = 0; y < bh; y++) {
       const ty = oy + y
       if (ty < 0 || ty >= outH) continue
-      const wy = 1 - Math.abs((2 * y) / (h - 1) - 1)
-      for (let x = 0; x < w; x++) {
+      const dy = y - bh / 2
+      for (let x = 0; x < bw; x++) {
         const tx = ox + x
         if (tx < 0 || tx >= outW) continue
-        const wx = 1 - Math.abs((2 * x) / (w - 1) - 1)
+        const sp = (y * bw + x) * 4
+        if (data[sp + 3] < 16) continue
+        // Weight in the piece's unrotated frame (inverse-rotate the offset).
+        const dx = x - bw / 2
+        const u = cos * dx + sin * dy
+        const v = -sin * dx + cos * dy
+        const wx = Math.max(0, 1 - Math.abs((2 * u) / r.w))
+        const wy = Math.max(0, 1 - Math.abs((2 * v) / r.h))
         const weight = wx * wy + 1e-5
-        const sp = (y * w + x) * 4
         const tp = ty * outW + tx
         acc[tp * 3] += data[sp] * gain * weight
         acc[tp * 3 + 1] += data[sp + 1] * gain * weight

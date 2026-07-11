@@ -49,9 +49,19 @@ export default function Results({
         </div>
         <div className="score-notes">
           {result.errorPx !== null ? (
-            <span>seam error: {Math.round(result.errorPx)}px off the algorithm's registration</span>
+            <span>
+              seam error: {Math.round(result.errorPx)}px off the algorithm's registration
+              {level.pieces.length > 2 ? ` (mean over ${level.pieces.length - 1} seams)` : ''}
+            </span>
           ) : (
-            <span>both true prints must be on the board to form a seam</span>
+            <span>
+              all {level.pieces.length} true prints must be on the board to form a seam
+            </span>
+          )}
+          {level.maxTilt > 0 && result.rotErrDeg !== null && (
+            <span>
+              residual tilt: {result.rotErrDeg < 0.5 ? 'square — perfectly straightened' : `${result.rotErrDeg.toFixed(1)}° left on the prints`}
+            </span>
           )}
           <span>alignment score: {result.accuracy}/100</span>
           {result.decoyPenalty > 0 && (
@@ -59,7 +69,7 @@ export default function Results({
               noise image on the board: −{result.decoyPenalty} (the algorithm would have rejected it)
             </span>
           )}
-          <span>time used: {outcome.secondsUsed}s of 60</span>
+          <span>time used: {outcome.secondsUsed}s of {level.timeLimit}</span>
           {!outcome.usedFallback && (
             <span>
               system registration: {outcome.inliers}/{outcome.totalMatches} inliers (verified)

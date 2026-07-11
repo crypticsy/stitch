@@ -9,6 +9,14 @@ function gradeFor(score: number): string {
   return score >= 97 ? 'S' : score >= 85 ? 'A' : score >= 70 ? 'B' : score >= 50 ? 'C' : 'D'
 }
 
+function levelMeta(level: LevelDef): string {
+  const parts = [`${level.pieces.length + level.decoys.length} prints`]
+  if (level.decoys.length > 0) parts.push(`${level.decoys.length} noise`)
+  if (level.maxTilt > 0) parts.push('crooked')
+  if (level.pieces.length > 2) parts.push(`${level.pieces.length}-print seam`)
+  return parts.join(' · ')
+}
+
 export default function LevelSelect({
   onPick,
   onBack,
@@ -37,7 +45,7 @@ export default function LevelSelect({
           </button>
         </div>
 
-        {([1, 2, 3] as const).map((act) => (
+        {([1, 2, 3, 4] as const).map((act) => (
           <section className="act" key={act}>
             <h2>
               {ACT_NAMES[act]} <hr className="thread" />
@@ -56,18 +64,15 @@ export default function LevelSelect({
                       onClick={() => onPick(level)}
                     >
                       <div className="level-thumbs">
-                        <img src={level.pieceA} alt="" loading="lazy" />
-                        <img src={level.pieceB} alt="" loading="lazy" />
+                        {level.pieces.slice(0, 3).map((src, t) => (
+                          <img key={t} src={src} alt="" loading="lazy" />
+                        ))}
                       </div>
                       <div className="level-body">
                         <h3>{level.title}</h3>
                         <p>{open ? level.blurb : `Score ${UNLOCK_SCORE}+ on the previous seam to unlock.`}</p>
                         <div className="level-meta">
-                          <span>
-                            {level.decoys.length === 0
-                              ? '2 prints'
-                              : `${2 + level.decoys.length} prints · ${level.decoys.length} noise`}
-                          </span>
+                          <span>{levelMeta(level)}</span>
                           {score !== undefined && (
                             <span className="grade-chip">
                               {gradeFor(score)} · {score}
